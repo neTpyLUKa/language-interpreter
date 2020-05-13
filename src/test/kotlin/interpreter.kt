@@ -1,5 +1,3 @@
-import org.junit.Rule
-import org.junit.rules.ExpectedException
 import org.junit.Test as test
 import org.solution.Writer
 import org.solution.evalTree
@@ -31,8 +29,8 @@ class TestInterpreter {
         parseTree("", testWriter)
     }
 
-    val testsCorrect =
-        listOf<TestCase>(
+    private val testsCorrect =
+        listOf(
             TestCase("3+4;", "7", "simple"),
             TestCase("1 - 2; 6 * 3;", "-1, 18", "twoStatements"),
             TestCase("@x = 3 / 1; x * 2 + 1;", "7", "assignment"),
@@ -63,7 +61,7 @@ class TestInterpreter {
         }
     }
 
-    val testsThrows = listOf<TestCase>(
+    private val testsThrows = listOf(
         TestCase("3", "", "no ; in end"),
         TestCase("@a=3;b;", "", "not set variable"),
         TestCase("if 1 2;", "", "no brackets in if condition"),

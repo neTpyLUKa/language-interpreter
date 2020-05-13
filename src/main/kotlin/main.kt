@@ -4,9 +4,13 @@ import javax.swing.JTextArea
 import kotlinx.coroutines.*
 import java.lang.Exception
 
-class InterpreterLauncher(val input: JTextArea, val output: JTextArea, val writer: Writer = Writer(output)) {
+class InterpreterLauncher(
+    private val input: JTextArea,
+    private val output: JTextArea,
+    private val writer: Writer = Writer(output)
+) {
 
-    var prev: BaseObject? = null
+    private var prev: BaseObject? = null
 
     fun buildSyntaxTree() {
         GlobalScope.launch {
@@ -15,7 +19,7 @@ class InterpreterLauncher(val input: JTextArea, val output: JTextArea, val write
                     val tree = parseTree(input.text, writer)
                     if (prev != null) {
                         val res = tree.compareWithPrev(prev!!)
-                     //   println(res)
+                        //   println(res)
                         if (res == CompareResult.NewIfFound) {
                             writer.set("New if detected")
                         }
@@ -24,7 +28,7 @@ class InterpreterLauncher(val input: JTextArea, val output: JTextArea, val write
                 } catch (e: Exception) {
                     // syntax parsing error
                 }
-           //     Thread.sleep(1000L)
+                //     Thread.sleep(1000L)
             }
         }
     }

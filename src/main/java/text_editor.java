@@ -27,7 +27,7 @@ class editor extends JFrame implements ActionListener {
 
             // Set theme to ocean
             MetalLookAndFeel.setCurrentTheme(new OceanTheme());
-        } catch (Exception e) {
+        } catch (Exception ignored) {
         }
 
         // Text component
@@ -37,7 +37,7 @@ class editor extends JFrame implements ActionListener {
         t_other = new JTextArea();
         f_other.add(t_other);
         f_other.setSize(500, 250);
-        Thread thread = new Thread(() -> f_other.show());
+        Thread thread = new Thread(() -> f_other.setVisible(true));
         thread.start();
 
         launcher = new InterpreterLauncher(t, t_other, new Writer(t_other));
@@ -55,7 +55,7 @@ class editor extends JFrame implements ActionListener {
         f.add(t);
         f.setSize(250, 500);
         launcher.buildSyntaxTree();
-        f.show();
+        f.setVisible(true);
     }
 
     // If a button is pressed
@@ -64,7 +64,7 @@ class editor extends JFrame implements ActionListener {
     }
 
     // Main class
-    public static void main(String args[]) {
-        editor e = new editor();
+    public static void main(String[] args) {
+        new editor();
     }
 }

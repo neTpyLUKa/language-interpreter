@@ -2,7 +2,7 @@ package org.solution
 
 import kotlin.text.StringBuilder
 
-class Reader constructor(val code: String, private val size: Int = code.length) {
+class Reader constructor(private val code: String, private val size: Int = code.length) {
     var pos = 0
 
     private fun skipSpaces() {
