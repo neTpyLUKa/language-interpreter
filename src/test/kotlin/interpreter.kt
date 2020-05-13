@@ -50,10 +50,16 @@ class TestInterpreter {
     @test
     fun runCorrect() {
         for (test in testsCorrect) {
-            val testWriter = TestWriter()
-            val (tree, ifCount) = parseTree(test.input, testWriter)
-            evalTree(tree)
-            assert(testWriter.getString() == test.expected) { "TEST FAILED: ${test.name}, ${testWriter.getString()} != ${test.expected}" }
+            try {
+                val testWriter = TestWriter()
+                val tree = parseTree(test.input, testWriter)
+                evalTree(tree)
+                assert(testWriter.getString() == test.expected) { "TEST FAILED: ${test.name}, ${testWriter.getString()} != ${test.expected}" }
+            } catch (e: Exception) {
+                assert(false) {
+                    "TEST FAILED, UNEXPECTED EXCEPTION:  ${test.name}, ${e.message}"
+                }
+            }
         }
     }
 
@@ -65,7 +71,11 @@ class TestInterpreter {
         TestCase("@x=x;", "", "recursively init"),
         TestCase("{3=4;}", "", "= not in initialization"),
         TestCase("--4;", "", "Wrong int"),
-        TestCase("@asdsa$ = 123;", "", "wrong identifier")
+        TestCase("@asdsa$ = 123;", "", "wrong identifier"),
+        TestCase("if (3 + 2 > 6) @x123_ = 42; x123_;", "", "variables in global scope"),
+        TestCase("1; 2; 3", "", "no comma"),
+        TestCase("1;2; if(1) {2; 3}", "", "no comma in st block"),
+        TestCase("@1x = 4; 3 + 3;", "", "wrong identifier")
     )
 
     @test
@@ -73,7 +83,7 @@ class TestInterpreter {
         for (test in testsThrows) {
             val testWriter = TestWriter()
             try {
-                val (tree, ifCount) = parseTree(test.input, testWriter)
+                val tree = parseTree(test.input, testWriter)
                 evalTree(tree)
                 assert(false) { test.name }
             } catch (e: Exception) {

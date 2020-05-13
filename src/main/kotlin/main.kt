@@ -6,31 +6,37 @@ import java.lang.Exception
 
 class InterpreterLauncher(val input: JTextArea, val output: JTextArea, val writer: Writer = Writer(output)) {
 
-    var ifCount = 0
-    fun buildSyntaxTree() { // todo add new if detection
+    var prev: BaseObject? = null
+
+    fun buildSyntaxTree() {
         GlobalScope.launch {
             while (true) {
                 try {
-                    val (tree, newIfCOunt) = parseTree(input.text, writer) // todo return ifCount ?
-                    if (newIfCOunt > ifCount) {
-                        writer.set("New if detected")
+                    val tree = parseTree(input.text, writer)
+                    if (prev != null) {
+                        val res = tree.compareWithPrev(prev!!)
+                     //   println(res)
+                        if (res == CompareResult.NewIfFound) {
+                            writer.set("New if detected")
+                        }
                     }
-                    ifCount = newIfCOunt
+                    prev = tree
                 } catch (e: Exception) {
                     // syntax parsing error
                 }
-                Thread.sleep(1000L)
+           //     Thread.sleep(1000L)
             }
         }
     }
 
     fun runInterpreter() {
+        writer.set("")
         try {
-            val (tree, ifCount) = parseTree(input.text, writer)
-            writer.set("")
+            val tree = parseTree(input.text, writer)
             evalTree(tree)
         } catch (e: Exception) {
             System.err.println("Interpreting error")
+            writer.set("$e\n${e.message}")
         }
     }
 }

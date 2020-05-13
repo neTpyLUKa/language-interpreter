@@ -1,7 +1,10 @@
 package org.solution
 
+class SyntaxException(message: String) : Exception(message) {
+
+}
+
 class Scope(private val values: MutableMap<String, Int> = mutableMapOf()) {
-    var ifCount = 0
     fun getValue(identifier: String): Int {
         return values[identifier]!!
     }
@@ -11,54 +14,81 @@ class Scope(private val values: MutableMap<String, Int> = mutableMapOf()) {
     }
 }
 
-open class Object(val reader: Reader, val writer: Writer, val scope: Scope) {
-    open fun eval(): Object? {
+enum class CompareResult {
+    NewIfFound, IfNotFound, OtherChangeDetected
+}
+
+open class BaseObject(val reader: Reader, val writer: Writer, val scope: Scope) {
+    open fun eval(): BaseObject? {
+        throw RuntimeException("Base class method implementation should not be called")
+    }
+
+    open fun compareWithPrev(tree: BaseObject): CompareResult { // return true if new if detected
         throw RuntimeException("Base class method implementation should not be called")
     }
 }
 
 class Cell constructor(
-    private val left: Object,
-    private val right: Object,
+    private val left: BaseObject,
+    private val right: BaseObject,
     reader: Reader,
     writer: Writer,
     scope: Scope
 ) :
-    Object(reader, writer, scope) {
-    override fun eval(): Object? {
+    BaseObject(reader, writer, scope) {
+    override fun eval(): BaseObject? {
         left.eval()
         right.eval()
         return null
     }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("Cell cmp")
+        if (tree is Cell) {
+        //    println("Cell right cmp")
+            val rhs = right.compareWithPrev(tree.right)
+            if (rhs != CompareResult.IfNotFound) {
+                return rhs
+            }
+          //  println("Cell left cmp")
+            return left.compareWithPrev(tree.left)
+        }
+        return CompareResult.OtherChangeDetected
+    }
 }
 
-open class Statement constructor(reader: Reader, writer: Writer, scope: Scope) : Object(reader, writer, scope) {
-    override fun eval(): Object? {
+open class Statement constructor(reader: Reader, writer: Writer, scope: Scope) : BaseObject(reader, writer, scope) {
+    override fun eval(): BaseObject? {
+        throw RuntimeException("Statement is not for explicit construction")
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
         throw RuntimeException("Statement is not for explicit construction")
     }
 
     companion object {
-        fun parse(reader: Reader, writer: Writer, scope: Scope): Statement {
-            try {
-                return IfStatement.parse(reader, writer, scope)
-            } catch (e: Exception) {
-                // trying other one
-            }
-            try {
-                return AssignStatement.parse(reader, writer, scope)
-            } catch (e: Exception) {
-                // trying other one
-            }
-
-            try {
-                return BlockStatement.parse(reader, writer, scope)
-            } catch (e: Exception) {
-                // trying other one
-            }
-            try {
-                return ExpressionStatement.parse(reader, writer, scope)
-            } catch (e: Exception) {
-                throw RuntimeException("No statement candidate found")
+        fun parse(reader: Reader, writer: Writer, scope: Scope): Statement? {
+            val ch = reader.peek() ?: return null
+            //  println("ch = $ch")
+            when (ch) {
+                'i' -> {
+                    return IfStatement.parse(reader, writer, scope)
+                }
+                '@' -> {
+                    return AssignStatement.parse(reader, writer, scope)
+                }
+                '{' -> {
+                    return BlockStatement.parse(reader, writer, scope)
+                }
+                else -> {
+                    val oldPos = reader.pos
+                    return try {
+                        ExpressionStatement.parse(reader, writer, scope)
+                    } catch (e: Exception) {
+                        reader.pos = oldPos
+                        null
+                    }
+                }
             }
         }
     }
@@ -67,17 +97,27 @@ open class Statement constructor(reader: Reader, writer: Writer, scope: Scope) :
 open class ExpressionStatement constructor(val expression: Expression, reader: Reader, writer: Writer, scope: Scope) :
     Statement(reader, writer, scope) {
 
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
         val result = expression.eval()
         writer.append(result.value.toString())
         return result
     }
 
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("ExprSt cmp")
+        if (tree is ExpressionStatement) {
+        //    println("ExprSt Expr cmp")
+            return expression.compareWithPrev(tree.expression)
+        }
+        return CompareResult.OtherChangeDetected
+    }
+
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): ExpressionStatement {
             val expression = Expression.parse(reader, writer, scope)
+
             if (!reader.read(";")) {
-                throw RuntimeException("Expected ;")
+                throw SyntaxException("Expected ;")
             }
 
             return ExpressionStatement(expression, reader, writer, scope)
@@ -93,7 +133,7 @@ class IfStatement constructor(
     scope: Scope
 ) :
     Statement(reader, writer, scope) {
-    override fun eval(): Object? {
+    override fun eval(): BaseObject? {
         val result = expression?.eval()?.value
         if (result == null || result > 0) {
             return statement.eval()
@@ -101,21 +141,50 @@ class IfStatement constructor(
         return null
     }
 
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+       // println("If cmp")
+        val curType = getIfType()
+        if (tree is IfStatement) {
+            val prevType = tree.getIfType()
+            if (curType == IfType.TwoOrMoreStatement && prevType == IfType.OneStatement) {
+                return CompareResult.NewIfFound
+            }
+         //   println("If st cmp")
+            return statement.compareWithPrev(tree.statement)
+        }
+        if (curType == IfType.TwoOrMoreStatement) {
+            return CompareResult.NewIfFound
+        }
+        return CompareResult.OtherChangeDetected
+    }
+
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): IfStatement {
             if (!reader.read("if")) {
-                throw RuntimeException("Expected if")
+                throw SyntaxException("Expected if")
             }
+
             val expression = Expression.parseInBrackets(reader, writer, scope)
-            val statement = Statement.parse(reader, writer, scope)
-            if (statement is BlockStatement) {
-                val list = statement.statementList
-                if (list is Cell) { // means there are two statements at least in if body
-                    ++scope.ifCount
-                }
-            }
+
+            val statement =
+                Statement.parse(reader, writer, scope) ?: throw SyntaxException("Error parsing statement (if)")
+
             return IfStatement(expression, statement, reader, writer, scope)
         }
+    }
+
+    fun getIfType(): IfType {
+        if (statement is BlockStatement) {
+            val list = statement.statementList
+            if (list is Cell) { // means there are two statements at least in if body
+                return IfType.TwoOrMoreStatement
+            }
+        }
+        return IfType.OneStatement
+    }
+
+    enum class IfType {
+        OneStatement, TwoOrMoreStatement
     }
 }
 
@@ -126,47 +195,73 @@ class AssignStatement constructor(
     writer: Writer,
     scope: Scope
 ) : Statement(reader, writer, scope) {
-    override fun eval(): Object? {
+    override fun eval(): BaseObject? {
         val integer = expression.eval()
         val value = integer.value
         scope.setValue(identifier.identifier, value)
         return integer
     }
 
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("Assign cmp")
+        if (tree is AssignStatement) {
+        //    println("Assign Id cmp")
+            val idCmp = identifier.compareWithPrev(tree.identifier)
+            if (idCmp != CompareResult.IfNotFound) {
+                return idCmp
+            }
+          //  println("Assign Expr cmp")
+            return expression.compareWithPrev(tree.expression)
+        }
+        return CompareResult.OtherChangeDetected
+    }
+
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): AssignStatement {
             if (!reader.read("@")) {
-                throw RuntimeException("Expected @")
+                throw SyntaxException("Expected @")
             }
+
             val identifier = Identifier.parse(reader, writer, scope)
+
             if (!reader.read("=")) {
-                throw RuntimeException("Expected @")
+                throw SyntaxException("Expected =")
             }
+
             val expressionStatement = ExpressionStatement.parse(reader, writer, scope)
+
             return AssignStatement(identifier, expressionStatement.expression, reader, writer, scope)
         }
     }
 }
 
-class BlockStatement constructor(val statementList: Object, reader: Reader, writer: Writer, scope: Scope) :
+class BlockStatement constructor(val statementList: BaseObject, reader: Reader, writer: Writer, scope: Scope) :
     Statement(reader, writer, scope) {
-    override fun eval(): Object? {
+    override fun eval(): BaseObject? {
         return statementList.eval()
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("Block cmp")
+        if (tree is BlockStatement) {
+        //    println("Block StList cmp")
+            return statementList.compareWithPrev(tree.statementList)
+        }
+        return CompareResult.OtherChangeDetected
     }
 
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): BlockStatement {
             if (!reader.read("{")) {
-                throw RuntimeException("Expected {")
+                throw SyntaxException("Expected {")
             }
 
-            val statementList =
-                parseStatementList(reader, writer, scope)
-                    ?: throw RuntimeException("Empty block statement or error parsing")
+            val statementList = parseStatementList(reader, writer, scope)!!
 
             if (!reader.read("}")) {
-                throw RuntimeException("Expected }")
+                throw SyntaxException("Expected }")
             }
+
             return BlockStatement(statementList, reader, writer, scope)
         }
     }
@@ -174,7 +269,11 @@ class BlockStatement constructor(val statementList: Object, reader: Reader, writ
 
 open class Expression constructor(reader: Reader, writer: Writer, scope: Scope) :
     Statement(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
+        throw RuntimeException("Expression is not for explicit construction")
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
         throw RuntimeException("Expression is not for explicit construction")
     }
 
@@ -185,23 +284,17 @@ open class Expression constructor(reader: Reader, writer: Writer, scope: Scope) 
 
         fun parseInBrackets(reader: Reader, writer: Writer, scope: Scope): Expression? {
             if (!reader.read("(")) {
-                throw RuntimeException("Expected (")
+                throw SyntaxException("Expected (")
+            }
+            if (reader.read(")")) {
+                return null
             }
 
-            val ans: Expression
-            try {
-                ans = parse(reader, writer, scope)
-            } catch (e: Exception) {
-                if (reader.read(")")) {
-                    return null
-                }
-                throw RuntimeException("Expected )")
-            }
+            val ans = parse(reader, writer, scope)
 
             if (!reader.read(")")) {
-                throw RuntimeException("Expected )")
+                throw SyntaxException("Expected )")
             }
-
             return ans
         }
     }
@@ -209,12 +302,17 @@ open class Expression constructor(reader: Reader, writer: Writer, scope: Scope) 
 
 open class ConditionalExpression constructor(reader: Reader, writer: Writer, scope: Scope) :
     Expression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
+        throw RuntimeException("Statement is not for explicit construction")
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
         throw RuntimeException("Statement is not for explicit construction")
     }
 
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): Expression {
+            // println("Parsing condExpr")
             val first = PlusMinusExpression.parse(reader, writer, scope)
 
             var isLess = false
@@ -239,11 +337,25 @@ class LessExpression constructor(
     writer: Writer,
     scope: Scope
 ) : ConditionalExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
         val leftValue = left.eval().value
         val rightValue = right.eval().value
         val toInt = if (leftValue < rightValue) 1 else 0
-        return Integer(toInt, reader, writer, scope)
+        return IntExpression(toInt, reader, writer, scope)
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("Less cmp")
+        if (tree is LessExpression) {
+        //    println("Less left Expr cmp")
+            val lhs = left.compareWithPrev(tree.left)
+            if (lhs != CompareResult.IfNotFound) {
+                return lhs
+            }
+          //  println("Less right Expr cmp")
+            return right.compareWithPrev(tree.right)
+        }
+        return CompareResult.OtherChangeDetected
     }
 }
 
@@ -254,33 +366,55 @@ class GreaterExpression constructor(
     writer: Writer,
     scope: Scope
 ) : ConditionalExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
         val leftValue = left.eval().value
         val rightValue = right.eval().value
         val toInt = if (leftValue > rightValue) 1 else 0
-        return Integer(toInt, reader, writer, scope)
+        return IntExpression(toInt, reader, writer, scope)
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+     //   println("Greater cmp")
+        if (tree is GreaterExpression) {
+       //     println("Greater left Expr cmp")
+            val lhs = left.compareWithPrev(tree.left)
+            if (lhs != CompareResult.IfNotFound) {
+                return lhs
+            }
+         //   println("Greater right Expr cmp")
+            return right.compareWithPrev(tree.right)
+        }
+        return CompareResult.OtherChangeDetected
     }
 }
 
 open class PlusMinusExpression constructor(reader: Reader, writer: Writer, scope: Scope) :
     ConditionalExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
+        throw RuntimeException("PlusMinusExpression is not for explicit construction")
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
         throw RuntimeException("PlusMinusExpression is not for explicit construction")
     }
 
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): Expression {
+            // println("Parsing pmexpr")
             var pmExpr = MultDivExpression.parse(reader, writer, scope)
+
             while (true) {
                 pmExpr = when {
                     reader.read("+") -> {
                         val mdExpr = MultDivExpression.parse(reader, writer, scope)
                         PlusExpression(pmExpr, mdExpr, reader, writer, scope)
                     }
+
                     reader.read("-") -> {
                         val mdExpr = MultDivExpression.parse(reader, writer, scope)
                         MinusExpression(pmExpr, mdExpr, reader, writer, scope)
                     }
+
                     else -> {
                         return pmExpr
                     }
@@ -298,10 +432,24 @@ class PlusExpression constructor(
     scope: Scope
 ) :
     PlusMinusExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
         val leftValue = left.eval().value
         val rightValue = right.eval().value
-        return Integer(leftValue + rightValue, reader, writer, scope)
+        return IntExpression(leftValue + rightValue, reader, writer, scope)
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("Plus cmp")
+        if (tree is PlusExpression) {
+        //    println("Plus left Expr cmp")
+            val lhs = left.compareWithPrev(tree.left)
+            if (lhs != CompareResult.IfNotFound) {
+                return lhs
+            }
+          //  println("Plus right Expr cmp")
+            return right.compareWithPrev(tree.right)
+        }
+        return CompareResult.OtherChangeDetected
     }
 }
 
@@ -312,32 +460,54 @@ class MinusExpression constructor(
     writer: Writer,
     scope: Scope
 ) : PlusMinusExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
         val leftValue = left.eval().value
         val rightValue = right.eval().value
-        return Integer(leftValue - rightValue, reader, writer, scope)
+        return IntExpression(leftValue - rightValue, reader, writer, scope)
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("Minus cmp")
+        if (tree is MinusExpression) {
+        //    println("Minus left Expr cmp")
+            val lhs = left.compareWithPrev(tree.left)
+            if (lhs != CompareResult.IfNotFound) {
+                return lhs
+            }
+          //  println("Minus right Expr cmp")
+            return right.compareWithPrev(tree.right)
+        }
+        return CompareResult.OtherChangeDetected
     }
 }
 
 open class MultDivExpression constructor(reader: Reader, writer: Writer, scope: Scope) :
     PlusMinusExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
+        throw RuntimeException("MultDivExpression is not for explicit construction")
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
         throw RuntimeException("MultDivExpression is not for explicit construction")
     }
 
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): Expression {
+            //  println("Parsing MD expr")
             var mdExpr = SimpleExpression.parse(reader, writer, scope)
+
             while (true) {
                 mdExpr = when {
                     reader.read("*") -> {
                         val simpleExpr = SimpleExpression.parse(reader, writer, scope)
                         MultiplyExpression(mdExpr, simpleExpr, reader, writer, scope)
                     }
+
                     reader.read("/") -> {
                         val simpleExpr = SimpleExpression.parse(reader, writer, scope)
                         DivisionExpression(mdExpr, simpleExpr, reader, writer, scope)
                     }
+
                     else -> {
                         return mdExpr
                     }
@@ -355,10 +525,24 @@ class MultiplyExpression constructor(
     scope: Scope
 ) :
     MultDivExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
         val leftValue = left.eval().value
         val rightValue = right.eval().value
-        return Integer(leftValue * rightValue, reader, writer, scope)
+        return IntExpression(leftValue * rightValue, reader, writer, scope)
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("Mult cmp")
+        if (tree is MultiplyExpression) {
+        //    println("Mult left Expr cmp")
+            val lhs = left.compareWithPrev(tree.left)
+            if (lhs != CompareResult.IfNotFound) {
+                return lhs
+            }
+          //  println("Mult right Expr cmp")
+            return right.compareWithPrev(tree.right)
+        }
+        return CompareResult.OtherChangeDetected
     }
 }
 
@@ -370,80 +554,130 @@ class DivisionExpression constructor(
     scope: Scope
 ) :
     MultDivExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
         val leftValue = left.eval().value
         val rightValue = right.eval().value
-        return Integer(leftValue / rightValue, reader, writer, scope)
+        return IntExpression(leftValue / rightValue, reader, writer, scope)
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+    //    println("Div cmp")
+        if (tree is DivisionExpression) {
+      //      println("Div left Expr cmp")
+            val lhs = left.compareWithPrev(tree.left)
+            if (lhs != CompareResult.IfNotFound) {
+                return lhs
+            }
+        //    println("Div right Expr cmp")
+            return right.compareWithPrev(tree.right)
+        }
+        return CompareResult.OtherChangeDetected
     }
 }
 
 open class SimpleExpression constructor(reader: Reader, writer: Writer, scope: Scope) :
     MultDivExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
+        throw RuntimeException("SimpleExpression is not for explicit construction")
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
         throw RuntimeException("SimpleExpression is not for explicit construction")
     }
 
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): Expression {
-            try {
-                return Integer.parse(reader, writer, scope)
-            } catch (e: Exception) {
-                // trying other one
-            }
-            try {
-                return Identifier.parse(reader, writer, scope)
-            } catch (e: Exception) {
-                // trying other one
-            }
-            try {
+            //  println("Parsing Simple expr")
+            val ch = reader.peek() ?: throw SyntaxException("EOF")
+            //  println("ch = $ch")
+
+            if (ch == '(') {
                 return parseInBrackets(reader, writer, scope)!!
-            } catch (e: Exception) {
-                throw RuntimeException("No SimpleExpression candidate found")
             }
+
+            try {
+                return IntExpression.parse(reader, writer, scope)
+            } catch (e: SyntaxException) {
+                // trying other one. integer failure does not change reader state
+            }
+
+            return Identifier.parse(reader, writer, scope)
         }
     }
 }
 
 class Identifier constructor(val identifier: String, reader: Reader, writer: Writer, scope: Scope) :
     SimpleExpression(reader, writer, scope) {
-    override fun eval(): Integer {
-        return Integer(scope.getValue(identifier), reader, writer, scope)
+    override fun eval(): IntExpression {
+        return IntExpression(scope.getValue(identifier), reader, writer, scope)
+    }
+
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+      //  println("Id cmp")
+        if (tree is Identifier) {
+            if (identifier != tree.identifier) {
+        //        println("Id not equal")
+                return CompareResult.OtherChangeDetected
+            }
+          //  println("Id equal")
+            return CompareResult.IfNotFound
+        }
+        return CompareResult.OtherChangeDetected
     }
 
     companion object {
         fun parse(reader: Reader, writer: Writer, scope: Scope): Identifier {
-            val identifier = reader.readIdentifier() ?: throw RuntimeException("Error parsing identifier")
+            val identifier = reader.readIdentifier() ?: throw SyntaxException("Error parsing identifier")
             return Identifier(identifier, reader, writer, scope)
         }
     }
 }
 
-class Integer constructor(val value: Int, reader: Reader, writer: Writer, scope: Scope) :
+class IntExpression constructor(val value: Int, reader: Reader, writer: Writer, scope: Scope) :
     SimpleExpression(reader, writer, scope) {
-    override fun eval(): Integer {
+    override fun eval(): IntExpression {
         return this
     }
 
+    override fun compareWithPrev(tree: BaseObject): CompareResult {
+     //   println("Int cmp")
+        if (tree is IntExpression) {
+       //     println("values: $value, ${tree.value}")
+            if (value != tree.value) {
+         //       println("Int not equal")
+                return CompareResult.OtherChangeDetected
+            }
+           // println("Int equal")
+            return CompareResult.IfNotFound
+        }
+        return CompareResult.OtherChangeDetected
+    }
+
     companion object {
-        fun parse(reader: Reader, writer: Writer, scope: Scope): Integer {
-            val integer = reader.readInteger() ?: throw RuntimeException("Error parsing integer")
-            return Integer(integer, reader, writer, scope)
+        fun parse(reader: Reader, writer: Writer, scope: Scope): IntExpression {
+            val integer = reader.readInteger() ?: throw SyntaxException("Error parsing integer")
+            return IntExpression(integer, reader, writer, scope)
         }
     }
 }
 
-fun parseStatementList(reader: Reader, writer: Writer, scope: Scope): Object? {
-    var stList: Object?
+fun parseStatementList(reader: Reader, writer: Writer, scope: Scope): BaseObject? {
+    var stList: BaseObject?
     try {
         stList = Statement.parse(reader, writer, scope)
-    } catch (e: Exception) {
+    } catch (e: SyntaxException) {
+      //  println("Exception1 ${e.message}")
         return null
     }
     while (true) {
         var nextStatement: Statement?
         try {
             nextStatement = Statement.parse(reader, writer, scope)
-        } catch (e: Exception) {
+        } catch (e: SyntaxException) {
+        //    println("Exception2 ${e.message}")
+            return null
+        }
+        if (nextStatement == null) {
             return stList
         }
 
@@ -451,13 +685,17 @@ fun parseStatementList(reader: Reader, writer: Writer, scope: Scope): Object? {
     }
 }
 
-fun parseTree(code: String, writer: Writer): Pair<Object, Int> {
+fun parseTree(code: String, writer: Writer): BaseObject {
     val reader = Reader(code)
     val scope = Scope()
     val tmp = parseStatementList(reader, writer, scope)
-    return Pair(tmp!!, scope.ifCount)
+    if (!reader.isEOF()) {
+        throw RuntimeException("Some data left: ${reader.remainingCode()}")
+    }
+
+    return tmp!!
 }
 
-fun evalTree(obj: Object) {
+fun evalTree(obj: BaseObject) {
     obj.eval()
 }

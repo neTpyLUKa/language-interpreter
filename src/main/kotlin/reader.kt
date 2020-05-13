@@ -3,12 +3,17 @@ package org.solution
 import kotlin.text.StringBuilder
 
 class Reader constructor(val code: String, private val size: Int = code.length) {
-    private var pos = 0
+    var pos = 0
 
     private fun skipSpaces() {
         while (pos < size && code[pos].isWhitespace()) {
             ++pos
         }
+    }
+
+    fun isEOF(): Boolean {
+        skipSpaces()
+        return pos == size
     }
 
     fun remainingCode(): String {
@@ -107,5 +112,13 @@ class Reader constructor(val code: String, private val size: Int = code.length) 
             }
             sb.append(ch)
         }
+    }
+
+    fun peek(): Char? {
+        if (isEOF()) {
+            return null
+        }
+        //spaces skipped in eof
+        return code[pos]
     }
 }
